@@ -12,72 +12,6 @@ import numpy as np
 from tqdm.auto import tqdm
 
 
-def retina_one_epoch(
-    model,
-    optimizer,
-    data_loader,
-    device,
-    epoch,
-    train_loss_hist,
-    print_freq,
-    scaler=None,
-    scheduler=None,
-):
-    model.train()
-    metric_logger = utils.MetricLogger(delimiter="  ")
-    metric_logger.add_meter("lr", utils.SmoothedValue(window_size=1, fmt="{value:.6f}"))
-    header = f"Epoch: [{epoch}]"
-
-    if epoch == 0:
-        warmup_factor = 1.0 / 1000
-        warmup_iters = min(1000, len(data_loader) - 1)
-
-        lr_scheduler = torch.optim.lr_scheduler.LinearLR(
-            optimizer, start_factor=warmup_factor, total_iters=warmup_iters
-        )
-
-    step_counter = 0
-    for images, targets in metric_logger.log_every(data_loader, print_freq, header):
-        step_counter += 1
-        images = list(image.to(device) for image in images)
-        targets = [
-            {k: v.to(device).to(torch.int64) for k, v in t.items()} for t in targets
-        ]
-
-        with torch.cuda.amp.autocast(enabled=scaler is not None):
-            loss_dict = model(images, targets)
-            losses = sum(loss for loss in loss_dict.values())
-
-            # reduce losses over all GPUs for logging purposes
-        loss_dict_reduced = utils.reduce_dict(loss_dict)
-        losses_reduced = sum(loss for loss in loss_dict_reduced.values())
-        loss_value = losses_reduced.item()
-
-        train_loss_hist.send(loss_value)
-
-        optimizer.zero_grad()
-        losses.backward()
-        optimizer.step()
-
-        if lr_scheduler is not None:
-            lr_scheduler.step()
-
-        metric_logger.update(loss=losses_reduced, **loss_dict_reduced)
-        metric_logger.update(lr=optimizer.param_groups[0]["lr"])
-        
-        print('retina output')
-        print('loss dict reduced')
-        print(loss_dict_reduced)
-        print('==================')
-        print('loss values')
-        print(loss_value)
-        sys.exit(1)
-        
-        
-
-    return loss_value
-
-
 def train_one_epoch(
     model,
     optimizer,
@@ -100,6 +34,9 @@ def train_one_epoch(
     batch_loss_box_reg_list = []
     batch_loss_objectness_list = []
     batch_loss_rpn_list = []
+
+    batch_classification_list = []
+    batch_bbox_reg_list = []
 
     lr_scheduler = None
     if epoch == 0:
@@ -147,22 +84,39 @@ def train_one_epoch(
 
         metric_logger.update(loss=losses_reduced, **loss_dict_reduced)
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
-        
-        print('fasterrcnn output')
-        print('loss dict reduced')
-        print(loss_dict_reduced)
-        print('==================')
-        print('loss values')
-        print(loss_value)
-        sys.exit(1)
-        
+
         batch_loss_list.append(loss_value)
-        batch_loss_cls_list.append(loss_dict_reduced["loss_classifier"].detach().cpu())
-        batch_loss_box_reg_list.append(loss_dict_reduced["loss_box_reg"].detach().cpu())
-        batch_loss_objectness_list.append(
-            loss_dict_reduced["loss_objectness"].detach().cpu()
-        )
-        batch_loss_rpn_list.append(loss_dict_reduced["loss_rpn_box_reg"].detach().cpu())
+        
+        # List of Faster R-CNN loss keys and corresponding lists
+        faster_rcnn_losses = {
+            "loss_classifier": batch_loss_cls_list,
+            "loss_box_reg": batch_loss_box_reg_list,
+            "loss_objectness": batch_loss_objectness_list,
+            "loss_rpn_box_reg": batch_loss_rpn_list,
+        }
+
+        # List of RetinaNet loss keys and corresponding lists
+        retinanet_losses = {
+            "classification": batch_classification_list,
+            "bbox_regression": batch_bbox_reg_list,
+        }
+
+        # Handle Faster R-CNN losses
+        for loss_name, target_list in faster_rcnn_losses.items():
+            if (
+                loss_name in loss_dict_reduced
+                and loss_dict_reduced[loss_name] is not None
+            ):
+                target_list.append(loss_dict_reduced[loss_name].detach().cpu())
+
+        # Handle RetinaNet losses
+        for loss_name, target_list in retinanet_losses.items():
+            if (
+                loss_name in loss_dict_reduced
+                and loss_dict_reduced[loss_name] is not None
+            ):
+                target_list.append(loss_dict_reduced[loss_name].detach().cpu())
+
         train_loss_hist.send(loss_value)
 
         if scheduler is not None:
@@ -175,6 +129,8 @@ def train_one_epoch(
         batch_loss_box_reg_list,
         batch_loss_objectness_list,
         batch_loss_rpn_list,
+        batch_classification_list,
+        batch_bbox_reg_list,
     )
 
 
