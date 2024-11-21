@@ -9,16 +9,85 @@ from torch_utils.coco_eval import CocoEvaluator
 from torch_utils.coco_utils import get_coco_api_from_dataset
 from utils.general import save_validation_results
 import numpy as np
-def train_one_epoch(
-    model, 
-    optimizer, 
-    data_loader, 
-    device, 
-    epoch, 
+from tqdm.auto import tqdm
+
+
+def retina_one_epoch(
+    model,
+    optimizer,
+    data_loader,
+    device,
+    epoch,
     train_loss_hist,
-    print_freq, 
+    print_freq,
     scaler=None,
-    scheduler=None
+    scheduler=None,
+):
+    model.train()
+    metric_logger = utils.MetricLogger(delimiter="  ")
+    metric_logger.add_meter("lr", utils.SmoothedValue(window_size=1, fmt="{value:.6f}"))
+    header = f"Epoch: [{epoch}]"
+
+    if epoch == 0:
+        warmup_factor = 1.0 / 1000
+        warmup_iters = min(1000, len(data_loader) - 1)
+
+        lr_scheduler = torch.optim.lr_scheduler.LinearLR(
+            optimizer, start_factor=warmup_factor, total_iters=warmup_iters
+        )
+
+    step_counter = 0
+    for images, targets in metric_logger.log_every(data_loader, print_freq, header):
+        step_counter += 1
+        images = list(image.to(device) for image in images)
+        targets = [
+            {k: v.to(device).to(torch.int64) for k, v in t.items()} for t in targets
+        ]
+
+        with torch.cuda.amp.autocast(enabled=scaler is not None):
+            loss_dict = model(images, targets)
+            losses = sum(loss for loss in loss_dict.values())
+
+            # reduce losses over all GPUs for logging purposes
+        loss_dict_reduced = utils.reduce_dict(loss_dict)
+        losses_reduced = sum(loss for loss in loss_dict_reduced.values())
+        loss_value = losses_reduced.item()
+
+        train_loss_hist.send(loss_value)
+
+        optimizer.zero_grad()
+        losses.backward()
+        optimizer.step()
+
+        if lr_scheduler is not None:
+            lr_scheduler.step()
+
+        metric_logger.update(loss=losses_reduced, **loss_dict_reduced)
+        metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+        
+        print('retina output')
+        print('loss dict reduced')
+        print(loss_dict_reduced)
+        print('==================')
+        print('loss values')
+        print(loss_value)
+        sys.exit(1)
+        
+        
+
+    return loss_value
+
+
+def train_one_epoch(
+    model,
+    optimizer,
+    data_loader,
+    device,
+    epoch,
+    train_loss_hist,
+    print_freq,
+    scaler=None,
+    scheduler=None,
 ):
     model.train()
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -45,8 +114,9 @@ def train_one_epoch(
     for images, targets in metric_logger.log_every(data_loader, print_freq, header):
         step_counter += 1
         images = list(image.to(device) for image in images)
-        targets = [{k: v.to(device).to(torch.int64) for k, v in t.items()} for t in targets]
-
+        targets = [
+            {k: v.to(device).to(torch.int64) for k, v in t.items()} for t in targets
+        ]
 
         with torch.cuda.amp.autocast(enabled=scaler is not None):
             loss_dict = model(images, targets)
@@ -77,24 +147,34 @@ def train_one_epoch(
 
         metric_logger.update(loss=losses_reduced, **loss_dict_reduced)
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
-
+        
+        print('fasterrcnn output')
+        print('loss dict reduced')
+        print(loss_dict_reduced)
+        print('==================')
+        print('loss values')
+        print(loss_value)
+        sys.exit(1)
+        
         batch_loss_list.append(loss_value)
-        batch_loss_cls_list.append(loss_dict_reduced['loss_classifier'].detach().cpu())
-        batch_loss_box_reg_list.append(loss_dict_reduced['loss_box_reg'].detach().cpu())
-        batch_loss_objectness_list.append(loss_dict_reduced['loss_objectness'].detach().cpu())
-        batch_loss_rpn_list.append(loss_dict_reduced['loss_rpn_box_reg'].detach().cpu())
+        batch_loss_cls_list.append(loss_dict_reduced["loss_classifier"].detach().cpu())
+        batch_loss_box_reg_list.append(loss_dict_reduced["loss_box_reg"].detach().cpu())
+        batch_loss_objectness_list.append(
+            loss_dict_reduced["loss_objectness"].detach().cpu()
+        )
+        batch_loss_rpn_list.append(loss_dict_reduced["loss_rpn_box_reg"].detach().cpu())
         train_loss_hist.send(loss_value)
 
         if scheduler is not None:
-            scheduler.step(epoch + (step_counter/len(data_loader)))
+            scheduler.step(epoch + (step_counter / len(data_loader)))
 
     return (
-        metric_logger, 
-        batch_loss_list, 
-        batch_loss_cls_list, 
-        batch_loss_box_reg_list, 
-        batch_loss_objectness_list, 
-        batch_loss_rpn_list
+        metric_logger,
+        batch_loss_list,
+        batch_loss_cls_list,
+        batch_loss_box_reg_list,
+        batch_loss_objectness_list,
+        batch_loss_rpn_list,
     )
 
 
@@ -112,13 +192,13 @@ def _get_iou_types(model):
 
 @torch.inference_mode()
 def evaluate(
-    model, 
-    data_loader, 
-    device, 
+    model,
+    data_loader,
+    device,
     save_valid_preds=False,
     out_dir=None,
     classes=None,
-    colors=None
+    colors=None,
 ):
     n_threads = torch.get_num_threads()
     # FIXME remove this and make paste_masks_in_image run on the GPU
@@ -145,7 +225,10 @@ def evaluate(
         outputs = [{k: v.to(cpu_device) for k, v in t.items()} for t in outputs]
         model_time = time.time() - model_time
 
-        res = {target["image_id"].item(): output for target, output in zip(targets, outputs)}
+        res = {
+            target["image_id"].item(): output
+            for target, output in zip(targets, outputs)
+        }
         evaluator_time = time.time()
         coco_evaluator.update(res)
         evaluator_time = time.time() - evaluator_time
@@ -160,7 +243,6 @@ def evaluate(
             )
         elif save_valid_preds == False and counter == 1:
             val_saved_image = np.ones((1, 64, 64, 3))
-            
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
