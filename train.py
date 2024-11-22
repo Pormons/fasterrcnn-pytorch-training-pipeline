@@ -14,8 +14,8 @@ python train.py --model fasterrcnn_resnet50_fpn --epochs 2 --use-train-aug --dat
 export CUDA_VISIBLE_DEVICES=0,1
 python -m torch.distributed.launch --nproc_per_node=2 --use_env train.py --data data_configs/smoke.yaml --epochs 100 --model fasterrcnn_resnet50_fpn --name smoke_training --batch 16
 """
-
-from torch_utils.engine import train_one_epoch, evaluate, utils, retina_one_epoch
+import sys
+from torch_utils.engine import train_one_epoch, evaluate, utils
 from torch.utils.data import distributed, RandomSampler, SequentialSampler
 from datasets import (
     create_train_dataset,
@@ -309,26 +309,37 @@ def main(args):
         checkpoint = torch.load(args["weights"], map_location=DEVICE)
         keys = list(checkpoint["model_state_dict"].keys())
         ckpt_state_dict = checkpoint["model_state_dict"]
-        # Get the number of classes from the loaded checkpoint.
-        old_classes = ckpt_state_dict["roi_heads.box_predictor.cls_score.weight"].shape[
-            0
-        ]
+
+        if "roi_heads.box_predictor.cls_score.weight" in keys:
+            # Get the number of classes from the loaded checkpoint.
+            old_classes = ckpt_state_dict[
+                "roi_heads.box_predictor.cls_score.weight"
+            ].shape[0]
+            
+
+        if "head.classification_head.cls_logits.weight" in keys:
+            # Get the number of classes from the loaded checkpoint.
+            old_classes = (
+                ckpt_state_dict["head.classification_head.cls_logits.weight"].shape[0]
+                // 9
+            )
 
         # Build the new model with number of classes same as checkpoint.
         build_model = create_model[args["model"]]
         model = build_model(num_classes=old_classes)
         # Load weights.
         model.load_state_dict(ckpt_state_dict)
-
-        # Change output features for class predictor and box predictor
-        # according to current dataset classes.
-        in_features = model.roi_heads.box_predictor.cls_score.in_features
-        model.roi_heads.box_predictor.cls_score = torch.nn.Linear(
-            in_features=in_features, out_features=NUM_CLASSES, bias=True
-        )
-        model.roi_heads.box_predictor.bbox_pred = torch.nn.Linear(
-            in_features=in_features, out_features=NUM_CLASSES * 4, bias=True
-        )
+        
+        if "roi_heads.box_predictor.cls_score.weight" in keys:
+            # Change output features for class predictor and box predictor
+            # according to current dataset classes.
+            in_features = model.roi_heads.box_predictor.cls_score.in_features
+            model.roi_heads.box_predictor.cls_score = torch.nn.Linear(
+                in_features=in_features, out_features=NUM_CLASSES, bias=True
+            )
+            model.roi_heads.box_predictor.bbox_pred = torch.nn.Linear(
+                in_features=in_features, out_features=NUM_CLASSES * 4, bias=True
+            )
 
         if args["resume_training"]:
             print("RESUMING TRAINING...")
@@ -384,6 +395,12 @@ def main(args):
         # LOAD THE OPTIMIZER STATE DICTIONARY FROM THE CHECKPOINT.
         print("Loading optimizer state dictionary...")
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        if args["lr"]:
+            new_lr = args["lr"]
+            # Set new learning rate
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = args["lr"]
+            print(f"Changed learning rate to {new_lr}")
 
     if args["cosine_annealing"]:
         # LR will be zero as we approach `steps` number of epochs each time.
@@ -441,17 +458,15 @@ def main(args):
                 )
             )
         )
-        
+
         if batch_loss_box_reg_list:
             loss_box_reg_list.append(np.mean(np.array(batch_loss_box_reg_list)))
             loss_objectness_list.append(np.mean(np.array(batch_loss_objectness_list)))
             loss_rpn_list.append(np.mean(np.array(batch_loss_rpn_list)))
-            
+
         if batch_classification_list:
             classification_list.append(np.mean(np.array(batch_classification_list)))
             bbox_reg_list.append(np.mean(np.array(batch_bbox_reg_list)))
-            
-
 
         # Append curent epoch's average loss to `train_loss_list_epoch`.
         train_loss_list_epoch.append(train_loss_hist.value)
@@ -472,7 +487,7 @@ def main(args):
         save_loss_plot(
             OUT_DIR, loss_cls_list, "epochs", "loss cls", save_name="train_loss_cls"
         )
-        
+
         if batch_classification_list:
             save_loss_plot(
                 OUT_DIR,
@@ -481,7 +496,7 @@ def main(args):
                 "classification",
                 save_name="classification",
             )
-            
+
             save_loss_plot(
                 OUT_DIR,
                 bbox_reg_list,
@@ -535,20 +550,20 @@ def main(args):
         )
 
         coco_log(OUT_DIR, stats)
-        
+
         csv_log(
-                OUT_DIR,
-                stats,
-                epoch,
-                train_loss_list,
-                loss_cls_list,
-                loss_box_reg_list,
-                loss_objectness_list,
-                loss_rpn_list,
-                classification_list,
-                bbox_reg_list
-            )
-        
+            OUT_DIR,
+            stats,
+            epoch,
+            train_loss_list,
+            loss_cls_list,
+            loss_box_reg_list,
+            loss_objectness_list,
+            loss_rpn_list,
+            classification_list,
+            bbox_reg_list,
+        )
+
         # WandB logging.
         if not args["disable_wandb"]:
             wandb_log(
