@@ -1,6 +1,5 @@
 from models import *
 
-
 def return_fasterrcnn_resnet50_fpn(num_classes, pretrained=True, coco_model=False):
     model = fasterrcnn_resnet50_fpn.create_model(
         num_classes, pretrained=pretrained, coco_model=coco_model
@@ -178,17 +177,23 @@ def return_fasterrcnn_vgg16(num_classes, pretrained=True, coco_model=False):
     )
     return model
 
+def return_fasterrcnn_mobilenetv3_large(num_classes, pretrained=True, coco_model=False):
+    model = fasterrcnn_mbv3_large.create_model(
+        num_classes, pretrained, coco_model=coco_model
+    )
+    return model
+
 
 def return_retinanet_resnet50_fpn(num_classes, pretrained=True, coco_model=False):
     model = retinanet_resnet50_fpn.create_model(
         num_classes, pretrained, coco_model=coco_model
     )
-    
     return model
 
 
 create_model = {
     "fasterrcnn_resnet50_fpn": return_fasterrcnn_resnet50_fpn,
+    'fasterrcnn_mobilenetv3_large': return_fasterrcnn_mobilenetv3_large,
     "fasterrcnn_mobilenetv3_large_fpn": return_fasterrcnn_mobilenetv3_large_fpn,
     "fasterrcnn_mobilenetv3_large_320_fpn": return_fasterrcnn_mobilenetv3_large_320_fpn,
     "fasterrcnn_resnet18": return_fasterrcnn_resnet18,

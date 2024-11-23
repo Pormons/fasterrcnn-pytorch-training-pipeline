@@ -14,6 +14,7 @@ python train.py --model fasterrcnn_resnet50_fpn --epochs 2 --use-train-aug --dat
 export CUDA_VISIBLE_DEVICES=0,1
 python -m torch.distributed.launch --nproc_per_node=2 --use_env train.py --data data_configs/smoke.yaml --epochs 100 --model fasterrcnn_resnet50_fpn --name smoke_training --batch 16
 """
+
 import sys
 from torch_utils.engine import train_one_epoch, evaluate, utils
 from torch.utils.data import distributed, RandomSampler, SequentialSampler
@@ -86,6 +87,9 @@ def parse_opt():
         default=4,
         type=int,
         help="number of workers for data processing/transforms/augmentations",
+    )
+    parser.add_argument(
+        "-optimizer", "--optimizer", choices=["sgd", "adam", "adamw"], default="sgd"
     )
     parser.add_argument(
         "-b", "--batch", default=4, type=int, help="batch size to load the data"
@@ -209,9 +213,6 @@ def main(args):
     # Initialize distributed mode.
     utils.init_distributed_mode(args)
 
-    # Initialize W&B with project name.
-    if not args["disable_wandb"]:
-        wandb_init(name=args["name"])
     # Load the data configurations
     with open(args["data"]) as file:
         data_configs = yaml.safe_load(file)
@@ -315,7 +316,6 @@ def main(args):
             old_classes = ckpt_state_dict[
                 "roi_heads.box_predictor.cls_score.weight"
             ].shape[0]
-            
 
         if "head.classification_head.cls_logits.weight" in keys:
             # Get the number of classes from the loaded checkpoint.
@@ -329,7 +329,7 @@ def main(args):
         model = build_model(num_classes=old_classes)
         # Load weights.
         model.load_state_dict(ckpt_state_dict)
-        
+
         if "roi_heads.box_predictor.cls_score.weight" in keys:
             # Change output features for class predictor and box predictor
             # according to current dataset classes.
@@ -386,10 +386,18 @@ def main(args):
         p.numel() for p in model.parameters() if p.requires_grad
     )
     print(f"{total_trainable_params:,} training parameters.")
+    
     # Get the model parameters.
     params = [p for p in model.parameters() if p.requires_grad]
-    # Define the optimizer.
-    optimizer = torch.optim.SGD(params, lr=args["lr"], momentum=0.9, nesterov=True)
+    # Use the optimizer argument
+    if args.optimizer == "sgd":
+        # Define the optimizer
+        optimizer = torch.optim.SGD(params, lr=args.lr, momentum=0.9, nesterov=True)
+    elif args.optimizer == "adam":
+        optimizer = torch.optim.Adam(params, lr=args.lr)
+    elif args.optimizer == "adamw":
+        optimizer = torch.optim.AdamW(params, lr=args.lr)
+
     # optimizer = torch.optim.AdamW(params, lr=0.0001, weight_decay=0.0005)
     if args["resume_training"]:
         # LOAD THE OPTIMIZER STATE DICTIONARY FROM THE CHECKPOINT.
@@ -399,7 +407,7 @@ def main(args):
             new_lr = args["lr"]
             # Set new learning rate
             for param_group in optimizer.param_groups:
-                param_group['lr'] = args["lr"]
+                param_group["lr"] = args["lr"]
             print(f"Changed learning rate to {new_lr}")
 
     if args["cosine_annealing"]:
@@ -564,21 +572,6 @@ def main(args):
             bbox_reg_list,
         )
 
-        # WandB logging.
-        if not args["disable_wandb"]:
-            wandb_log(
-                train_loss_hist.value,
-                batch_loss_list,
-                loss_cls_list,
-                loss_box_reg_list,
-                loss_objectness_list,
-                loss_rpn_list,
-                stats[1],
-                stats[0],
-                val_pred_image,
-                IMAGE_SIZE,
-            )
-
         # Save the current epoch model state. This can be used
         # to resume training. It saves model state dict, number of
         # epochs trained for, optimizer state dict, and loss function.
@@ -604,10 +597,6 @@ def main(args):
         early_stopping(stats[0])
         if early_stopping.early_stop:
             break
-
-        # Save models to Weights&Biases.
-    if not args["disable_wandb"]:
-        wandb_save_model(OUT_DIR)
 
 
 if __name__ == "__main__":

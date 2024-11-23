@@ -27,5 +27,6 @@ __all__ = [
     'fasterrcnn_mobilevit_xxs',
     'fasterrcnn_regnet_y_400mf',
     'fasterrcnn_vgg16',
-    'retinanet_resnet50_fpn'
+    'retinanet_resnet50_fpn',
+    'fcos_resnet50_fpn'
 ]
