@@ -89,7 +89,7 @@ def parse_opt():
         help="number of workers for data processing/transforms/augmentations",
     )
     parser.add_argument(
-        "-optimizer", "--optimizer", choices=["sgd", "adam", "adamw"], default="sgd"
+        "-optimizer", "--optimizer", default="sgd"
     )
     parser.add_argument(
         "-b", "--batch", default=4, type=int, help="batch size to load the data"
@@ -390,13 +390,13 @@ def main(args):
     # Get the model parameters.
     params = [p for p in model.parameters() if p.requires_grad]
     # Use the optimizer argument
-    if args.optimizer == "sgd":
+    if args["optimizer"] == "sgd":
         # Define the optimizer
-        optimizer = torch.optim.SGD(params, lr=args.lr, momentum=0.9, nesterov=True)
-    elif args.optimizer == "adam":
-        optimizer = torch.optim.Adam(params, lr=args.lr)
-    elif args.optimizer == "adamw":
-        optimizer = torch.optim.AdamW(params, lr=args.lr)
+        optimizer = torch.optim.SGD(params, lr=args["lr"], momentum=0.9, nesterov=True)
+    elif args["optimizer"] == "adam":
+        optimizer = torch.optim.Adam(params, lr=args["lr"])
+    elif args["optimizer"] == "adamw":
+        optimizer = torch.optim.AdamW(params, lr=args["lr"])
 
     # optimizer = torch.optim.AdamW(params, lr=0.0001, weight_decay=0.0005)
     if args["resume_training"]:
