@@ -88,8 +88,12 @@ def parse_opt():
         type=int,
         help="number of workers for data processing/transforms/augmentations",
     )
+    parser.add_argument("-optimizer", "--optimizer", default="sgd")
     parser.add_argument(
-        "-optimizer", "--optimizer", default="sgd"
+        "-scheduler",
+        "--scheduler",
+        default=None,
+        help="choose scheduler",
     )
     parser.add_argument(
         "-b", "--batch", default=4, type=int, help="batch size to load the data"
@@ -134,13 +138,6 @@ def parse_opt():
               all at once",
     )
     parser.add_argument(
-        "-ca",
-        "--cosine-annealing",
-        dest="cosine_annealing",
-        action="store_true",
-        help="use cosine annealing warm restarts",
-    )
-    parser.add_argument(
         "-w",
         "--weights",
         default=None,
@@ -174,13 +171,6 @@ def parse_opt():
         default="env://",
         type=str,
         help="url used to set up the distributed training",
-    )
-    parser.add_argument(
-        "-dw",
-        "--disable-wandb",
-        dest="disable_wandb",
-        action="store_true",
-        help="whether to use the wandb",
     )
     parser.add_argument(
         "--sync-bn", dest="sync_bn", help="use sync batch norm", action="store_true"
@@ -386,20 +376,25 @@ def main(args):
         p.numel() for p in model.parameters() if p.requires_grad
     )
     print(f"{total_trainable_params:,} training parameters.")
-    
+
     # Get the model parameters.
     params = [p for p in model.parameters() if p.requires_grad]
     # Use the optimizer argument
     if args["optimizer"] == "sgd":
         # Define the optimizer
-        print('using SGD optimizer')
+        print("using SGD optimizer")
         optimizer = torch.optim.SGD(params, lr=args["lr"], momentum=0.9, nesterov=True)
     elif args["optimizer"] == "adam":
-        print('using Adam optimizer')
+        print("using Adam optimizer")
         optimizer = torch.optim.Adam(params, lr=args["lr"])
     elif args["optimizer"] == "adamw":
-        print('using AdamW optimizer')
-        optimizer = torch.optim.AdamW(params, lr=args["lr"])
+        print("using AdamW optimizer")
+        optimizer = torch.optim.AdamW(
+            params, lr=args["lr"]
+        )
+    
+    for param_group in optimizer.param_groups:
+        print(f"Learning rate: {param_group['lr']}")
 
     # optimizer = torch.optim.AdamW(params, lr=0.0001, weight_decay=0.0005)
     if args["resume_training"]:
@@ -409,18 +404,37 @@ def main(args):
         if args["lr"]:
             new_lr = args["lr"]
             # Set new learning rate
+            # optimizer.param_groups[0]["lr"] = args["lr"]
             for param_group in optimizer.param_groups:
                 param_group["lr"] = args["lr"]
             print(f"Changed learning rate to {new_lr}")
+            print(f"Current lr after update: {optimizer.param_groups[0]['lr']}")
 
-    if args["cosine_annealing"]:
+    if args["scheduler"] == "cosine-annealing-warmup":
+        print("scheduler cosine-annealing-warmup")
         # LR will be zero as we approach `steps` number of epochs each time.
         # If `steps = 5`, LR will slowly reduce to zero every 5 epochs.
         steps = NUM_EPOCHS + 10
         scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
             optimizer, T_0=steps, T_mult=1, verbose=False
         )
-    else:
+    elif args["scheduler"] == "reduce-on-plateau":
+        print("scheduler reduce-on-plateau")
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, "min")
+    elif args["scheduler"] == "one-cycle":
+        print("scheduler one-cycle")
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            optimizer,
+            epochs=NUM_EPOCHS,
+            max_lr=args["lr"],
+            steps_per_epoch=len(train_loader),
+        )
+    elif args["scheduler"] == "cosine-annealing":
+        print("scheduler cosine-annealing")
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=NUM_EPOCHS, eta_min=1e-6
+        )
+    elif args["scheduler"] is None:
         scheduler = None
 
     save_best_model = SaveBestModel()
@@ -447,7 +461,7 @@ def main(args):
             train_loss_hist,
             print_freq=100,
             scheduler=scheduler,
-            scaler=SCALER,
+            scaler=SCALER
         )
 
         stats, val_pred_image = evaluate(
