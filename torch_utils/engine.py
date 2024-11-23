@@ -22,6 +22,9 @@ def train_one_epoch(
     print_freq,
     scaler=None,
     scheduler=None,
+    lr_scheduler=None,
+    lr=0.001,
+    epochs=5,
 ):
     model.train()
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -38,11 +41,22 @@ def train_one_epoch(
     batch_classification_list = []
     batch_bbox_reg_list = []
 
-    lr_scheduler = None
-    if epoch == 0:
+    if lr_scheduler == "one-cycle":
+        print("scheduler one-cycle")
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            optimizer,
+            epochs=epochs,
+            max_lr=lr,
+            steps_per_epoch=len(data_loader),
+        )
+    elif lr_scheduler == "cosine-annealing":
+        print("scheduler cosine-annealing")
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=epochs, eta_min=1e-6
+        )
+    elif lr_scheduler is None:
         warmup_factor = 1.0 / 1000
         warmup_iters = min(1000, len(data_loader) - 1)
-
         lr_scheduler = torch.optim.lr_scheduler.LinearLR(
             optimizer, start_factor=warmup_factor, total_iters=warmup_iters
         )
@@ -55,7 +69,7 @@ def train_one_epoch(
             {k: v.to(device).to(torch.int64) for k, v in t.items()} for t in targets
         ]
 
-        with torch.amp.autocast('cuda',enabled=scaler is not None):
+        with torch.amp.autocast("cuda", enabled=scaler is not None):
             loss_dict = model(images, targets)
             losses = sum(loss for loss in loss_dict.values())
 
@@ -86,7 +100,7 @@ def train_one_epoch(
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
 
         batch_loss_list.append(loss_value)
-        
+
         # List of Faster R-CNN loss keys and corresponding lists
         faster_rcnn_losses = {
             "loss_classifier": batch_loss_cls_list,

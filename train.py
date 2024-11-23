@@ -194,6 +194,7 @@ def parse_opt():
               --project-dir will be named if not already present",
         type=str,
     )
+    parser.add_argument("--cosine-annealing", "warmup")
 
     args = vars(parser.parse_args())
     return args
@@ -225,7 +226,7 @@ def main(args):
     VISUALIZE_TRANSFORMED_IMAGES = args["vis_transformed"]
     OUT_DIR = set_training_dir(args["name"], args["project_dir"])
     COLORS = np.random.uniform(0, 1, size=(len(CLASSES), 3))
-    SCALER = torch.amp.GradScaler('cuda') if args["amp"] else None
+    SCALER = torch.amp.GradScaler("cuda") if args["amp"] else None
     # Set logging file.
     set_log(OUT_DIR)
     writer = set_summary_writer(OUT_DIR)
@@ -389,10 +390,8 @@ def main(args):
         optimizer = torch.optim.Adam(params, lr=args["lr"])
     elif args["optimizer"] == "adamw":
         print("using AdamW optimizer")
-        optimizer = torch.optim.AdamW(
-            params, lr=args["lr"]
-        )
-    
+        optimizer = torch.optim.AdamW(params, lr=args["lr"])
+
     for param_group in optimizer.param_groups:
         print(f"Learning rate: {param_group['lr']}")
 
@@ -409,34 +408,17 @@ def main(args):
                 param_group["lr"] = args["lr"]
             print(f"Changed learning rate to {new_lr}")
             print(f"Current lr after update: {optimizer.param_groups[0]['lr']}")
-
-    if args["scheduler"] == "cosine-annealing-warmup":
-        print("scheduler cosine-annealing-warmup")
+            
+    scheduler = None
+    if args["cosine-annealing"]:
+        print("cosine-annealing-warmup")
         # LR will be zero as we approach `steps` number of epochs each time.
         # If `steps = 5`, LR will slowly reduce to zero every 5 epochs.
         steps = NUM_EPOCHS + 10
         scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
             optimizer, T_0=steps, T_mult=1, verbose=False
         )
-    elif args["scheduler"] == "reduce-on-plateau":
-        print("scheduler reduce-on-plateau")
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, "min")
-    elif args["scheduler"] == "one-cycle":
-        print("scheduler one-cycle")
-        scheduler = torch.optim.lr_scheduler.OneCycleLR(
-            optimizer,
-            epochs=NUM_EPOCHS,
-            max_lr=args["lr"],
-            steps_per_epoch=len(train_loader),
-        )
-    elif args["scheduler"] == "cosine-annealing":
-        print("scheduler cosine-annealing")
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=NUM_EPOCHS, eta_min=1e-6
-        )
-    elif args["scheduler"] is None:
-        scheduler = None
-
+                  
     save_best_model = SaveBestModel()
     early_stopping = EarlyStopping(patience=args["patience"])
 
@@ -451,7 +433,7 @@ def main(args):
             batch_loss_objectness_list,
             batch_loss_rpn_list,
             batch_classification_list,
-            batch_bbox_reg_list,
+            batch_bbox_reg_list
         ) = train_one_epoch(
             model,
             optimizer,
@@ -461,7 +443,10 @@ def main(args):
             train_loss_hist,
             print_freq=100,
             scheduler=scheduler,
-            scaler=SCALER
+            scaler=SCALER,
+            lr_scheduler=args["scheduler"],
+            epochs=NUM_EPOCHS,
+            lr=args["lr"]
         )
 
         stats, val_pred_image = evaluate(
