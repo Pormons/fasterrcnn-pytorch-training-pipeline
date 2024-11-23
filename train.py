@@ -392,10 +392,13 @@ def main(args):
     # Use the optimizer argument
     if args["optimizer"] == "sgd":
         # Define the optimizer
+        print('using SGD optimizer')
         optimizer = torch.optim.SGD(params, lr=args["lr"], momentum=0.9, nesterov=True)
     elif args["optimizer"] == "adam":
+        print('using Adam optimizer')
         optimizer = torch.optim.Adam(params, lr=args["lr"])
     elif args["optimizer"] == "adamw":
+        print('using AdamW optimizer')
         optimizer = torch.optim.AdamW(params, lr=args["lr"])
 
     # optimizer = torch.optim.AdamW(params, lr=0.0001, weight_decay=0.0005)
